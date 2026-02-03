@@ -5,6 +5,7 @@ import { Command } from "commander";
 import { writeFile } from "node:fs/promises";
 import { buildArticle } from "./lib/article";
 import { extractVideoId } from "./lib/youtube";
+import { summarizeTranscript } from "./lib/summarize";
 import {
   resolveProviders,
   fetchTranscript,
@@ -33,6 +34,8 @@ program
   .option("--whisper-model <model>", "Whisper model (tiny|base|small|medium|large)", "base")
   .option("--lang <code>", "Preferred language code (en|zh|...)")
   .option("--no-fallback", "Disable fallback, only use first available provider")
+  .option("--summarize", "Summarize transcript into a structured article using AI")
+  .option("--model <model>", "AI model for summarization (default: gpt-4o)", "gpt-4o")
   .parse(process.argv);
 
 const inputs = program.args as string[];
@@ -48,6 +51,8 @@ const options = program.opts<{
   whisperModel?: string;
   lang?: string;
   fallback?: boolean;
+  summarize?: boolean;
+  model?: string;
 }>();
 
 async function main() {
@@ -108,20 +113,31 @@ async function main() {
     return;
   }
 
-  const outputBlocks = results.map(({ id, result }) => {
+  const outputBlocks: string[] = [];
+
+  for (const { id, result } of results) {
     const sourceUrl = `https://www.youtube.com/watch?v=${id}`;
     const title = options.title || result.title || `Video ${id}`;
 
     if (options.raw) {
-      return result.text.trim() + "\n";
+      outputBlocks.push(result.text.trim() + "\n");
+    } else if (options.summarize) {
+      const summary = await summarizeTranscript(result.text, {
+        title,
+        url: sourceUrl,
+        model: options.model
+      });
+      outputBlocks.push(summary.trim() + "\n");
+    } else {
+      outputBlocks.push(
+        buildArticle(result.text, {
+          title,
+          sourceUrl,
+          paragraphWords: options.paragraphWords
+        })
+      );
     }
-
-    return buildArticle(result.text, {
-      title,
-      sourceUrl,
-      paragraphWords: options.paragraphWords
-    });
-  });
+  }
 
   await output(joinBlocks(outputBlocks));
 }

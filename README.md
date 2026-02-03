@@ -9,6 +9,7 @@ CLI tool to turn YouTube video transcripts into readable articles.
   2. **yt-dlp** - Downloads YouTube subtitles directly, no token needed
   3. **Whisper** - Local audio transcription for videos without subtitles
 - **Smart formatting** - Converts raw transcripts into readable paragraphs
+- **AI summarization** - Use GPT-4o to rewrite transcripts into structured blog-style articles
 - **Batch processing** - Process multiple videos at once
 - **Flexible output** - Markdown article, raw text, or JSON
 
@@ -82,6 +83,12 @@ ytbr "dQw4w9WgXcQ" --lang zh
 
 # Use larger whisper model for better accuracy
 ytbr "dQw4w9WgXcQ" --provider whisper --whisper-model medium
+
+# Summarize into a structured article using AI (requires OPENAI_API_KEY)
+ytbr "dQw4w9WgXcQ" --summarize
+
+# Use a different model for summarization
+ytbr "dQw4w9WgXcQ" --summarize --model gpt-4o-mini
 ```
 
 ## CLI Options
@@ -99,6 +106,8 @@ ytbr "dQw4w9WgXcQ" --provider whisper --whisper-model medium
 | `--whisper-model <model>` | Whisper model size: `tiny`, `base`, `small`, `medium`, `large` (default: `base`) |
 | `--lang <code>` | Preferred language code (e.g., `en`, `zh`, `ja`) |
 | `--no-fallback` | Disable automatic fallback to other providers |
+| `--summarize` | Summarize transcript into structured article using AI (requires `OPENAI_API_KEY`) |
+| `--model <model>` | AI model for summarization (default: `gpt-4o`) |
 
 ## Provider System
 
@@ -139,6 +148,36 @@ When `--provider auto` (default):
 4. Error with suggestions
 ```
 
+## AI Summarization
+
+The `--summarize` option uses OpenAI's GPT models to rewrite the transcript into a structured, blog-style article in Chinese.
+
+**Features:**
+- Organizes content by topic with detailed sections
+- Preserves key numbers, definitions, and quotes
+- Keeps technical terms with Chinese annotations
+- Creates readable paragraphs with bullet points
+
+**Requirements:**
+- `OPENAI_API_KEY` environment variable
+
+**Example output structure:**
+```markdown
+## Metadata
+- Title: Video Title
+- Author: Channel Name
+- URL: https://youtube.com/watch?v=...
+
+## Overview
+核心论题与结论概述...
+
+## 主题一：...
+详细内容展开...
+
+## 主题二：...
+详细内容展开...
+```
+
 ## Configuration
 
 ### Environment Variables
@@ -152,7 +191,7 @@ YOUTUBE_TRANSCRIPT_API_TOKEN=your_token_here
 # Custom API endpoint (optional)
 YOUTUBE_TRANSCRIPT_API_URL=https://custom-api.example.com/transcripts
 
-# OpenAI API key for Whisper API transcription (optional)
+# OpenAI API key for Whisper API transcription and --summarize (optional)
 OPENAI_API_KEY=sk-...
 
 # Custom whisper model path for whisper.cpp (optional)
