@@ -11,6 +11,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "node --test dist/__tests__",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "ytbr": "tsx src/index.ts"
