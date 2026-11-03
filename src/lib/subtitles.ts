@@ -82,11 +82,6 @@ function collectLines(
 
       lines.push(cleaned);
     }
-
-    // Reset between blocks so subtitles from different cues are not merged
-    if (consecutiveOnly) {
-      lastCleaned = null;
-    }
   }
 
   return lines;
