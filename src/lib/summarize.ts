@@ -1,6 +1,42 @@
 import { env } from "node:process";
 
-const SYSTEM_PROMPT = `你将把一段 YouTube 视频重写成"阅读版本"，按内容主题分成若干小节；目标是让读者通过阅读就能完整理解视频讲了什么，就好像是在读一篇 Blog 版的文章一样。
+export type SummaryLang = "ar" | "en" | "zh" | "auto";
+
+const BASE_URL = (env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
+
+/**
+ * System prompt per summary language. "auto" asks the model to reply in the
+ * same language as the transcript/video instead of forcing a single language.
+ */
+function systemPromptFor(lang: SummaryLang): string {
+  if (lang === "ar") {
+    return `أنت مساعد يعيد صياغة نص تحويل فيديو يوتيوب إلى "نسخة قراءة" منظمة حسب المواضيع، بحيث يمكن للقارئ فهم محتوى الفيديو بالكامل من خلال القراءة، كما لو كان يقرأ نسخة مدونة من الفيديو.
+
+متطلبات الإخراج:
+
+1. بيانات التعريف
+- العنوان
+- المؤلف
+- الرابط
+
+2. نظرة عامة
+فقرة واحدة توضح المحور الأساسي للفيديو وخلاصته.
+
+3. الترتيب حسب المواضيع
+- كل قسم يُفصل بناءً على محتوى الفيديو بحيث لا يحتاج القارئ لمشاهدة الفيديو مرة أخرى؛ كل قسم لا يقل عن 500 كلمة.
+- إذا ظهرت طريقة/إطار/عملية، أعد صياغتها كخطوات واضحة أو فقرات.
+- إذا ظهرت أرقام رئيسية أو تعريفات أو اقتباسات، احتفظ بالكلمات الأساسية وأضف توضيحاً بين قوسين.
+
+الأسلوب والقيود:
+- لا تُختزل بشدة أبدًا.
+- لا تضيف حقائق جديدة؛ إذا كان التعبير غامضاً، احتفظ بالمعنى الأصلي وحدد عدم اليقين.
+- الأسماء الخاصة تُحتفظ بها بالنص الأصلي، مع إضافة ترجمة بالعربية بين قوسين عند توفرها.
+- لا تعكس أسئلة المتطلبات (مثل > 500 كلمة).
+- تجنب الفقرات الطويلة جداً؛ قسّم إلى فقرات منطقية (نقاط وبوائت).`;
+  }
+
+  if (lang === "zh") {
+    return `你将把一段 YouTube 视频重写成"阅读版本"，按内容主题分成若干小节；目标是让读者通过阅读就能完整理解视频讲了什么，就好像是在读一篇 Blog 版的文章一样。
 
 输出要求：
 
@@ -23,12 +59,66 @@ const SYSTEM_PROMPT = `你将把一段 YouTube 视频重写成"阅读版本"，�
 - 专有名词保留原文，并在括号给出中文释义（若转录中出现或能直译）。
 - 要求类的问题不用体现出来（例如 > 500 字）。
 - 避免一个段落的内容过多，可以拆解成多个逻辑段落（使用 bullet points）。`;
+  }
+
+  if (lang === "auto") {
+    return `You will rewrite a YouTube video transcript into a "reading version", organized by topic into sections, replying in the SAME LANGUAGE as the transcript/video, so the reader can fully understand what the video said just by reading, like a blog version of the article.
+
+Output requirements:
+
+1. Metadata
+- Title
+- Author
+- URL
+
+2. Overview
+One paragraph stating the core thesis and conclusion.
+
+3. Organize by theme
+- Each section should expand on the video content in detail so the reader does not need to re-watch; each section at least 500 words.
+- If a method/framework/process appears, rewrite it as clear steps or paragraphs.
+- If key numbers, definitions, or quotes appear, keep the core terms and add a note in parentheses.
+
+Style and limits:
+- Never over-summarize!
+- Do not add new facts; if expression is ambiguous, keep the original meaning and note uncertainty.
+- Keep proper nouns as-is, with an explanation in parentheses when available.
+- Requirement-style questions should not be reflected (e.g. > 500 words).
+- Avoid overly long paragraphs; split into logical paragraphs (use bullet points).`;
+  }
+
+  // "en"
+  return `You will rewrite a YouTube video transcript into a "reading version", organized by topic into sections, so the reader can fully understand what the video said just by reading, like a blog version of the article.
+
+Output requirements:
+
+1. Metadata
+- Title
+- Author
+- URL
+
+2. Overview
+One paragraph stating the core thesis and conclusion.
+
+3. Organize by theme
+- Each section should expand on the video content in detail so the reader does not need to re-watch; each section at least 500 words.
+- If a method/framework/process appears, rewrite it as clear steps or paragraphs.
+- If key numbers, definitions, or quotes appear, keep the core terms and add a note in parentheses.
+
+Style and limits:
+- Never over-summarize!
+- Do not add new facts; if expression is ambiguous, keep the original meaning and note uncertainty.
+- Keep proper nouns as-is, with an explanation in parentheses when available.
+- Requirement-style questions should not be reflected (e.g. > 500 words).
+- Avoid overly long paragraphs; split into logical paragraphs (use bullet points).`;
+}
 
 export interface SummarizeOptions {
   title?: string;
   author?: string;
   url?: string;
   model?: string;
+  lang?: SummaryLang;
 }
 
 export async function summarizeTranscript(
@@ -44,17 +134,15 @@ export async function summarizeTranscript(
   }
 
   const model = options.model || "gpt-4o";
+  const lang: SummaryLang = options.lang ?? "auto";
+  const systemPrompt = systemPromptFor(lang);
   const metadata = buildMetadata(options);
 
-  const userPrompt = `${metadata}
+  const userPrompt = `${metadata}\n\n以下是视频的转录文本：\n\n${transcript}`;
 
-以下是视频的转录文本：
+  process.stderr.write(`[summarize] Using ${model} (lang=${lang}) to summarize transcript...\n`);
 
-${transcript}`;
-
-  process.stderr.write(`[summarize] Using ${model} to summarize transcript...\n`);
-
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const response = await fetch(`${BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -63,7 +151,7 @@ ${transcript}`;
     body: JSON.stringify({
       model,
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
       ],
       temperature: 0.3
