@@ -12,6 +12,7 @@ import {
   type ProviderOptions,
   type TranscriptResult
 } from "./lib/providers";
+import type { SummaryLang } from "./lib/summarize";
 
 const program = new Command();
 
@@ -33,6 +34,11 @@ program
   )
   .option("--whisper-model <model>", "Whisper model (tiny|base|small|medium|large)", "base")
   .option("--lang <code>", "Preferred language code (en|zh|...)")
+  .option(
+    "--summary-lang <code>",
+    "Summary language (ar|en|zh|auto)",
+    "auto"
+  )
   .option("--no-fallback", "Disable fallback, only use first available provider")
   .option("--summarize", "Summarize transcript into a structured article using AI")
   .option("--model <model>", "AI model for summarization (default: gpt-4o)", "gpt-4o")
@@ -50,6 +56,7 @@ const options = program.opts<{
   provider?: "api" | "ytdlp" | "whisper" | "auto";
   whisperModel?: string;
   lang?: string;
+  summaryLang?: string;
   fallback?: boolean;
   summarize?: boolean;
   model?: string;
@@ -99,15 +106,38 @@ async function main() {
     results.push({ id: videoId, result });
   }
 
+  // If summarization is requested, produce summaries for all videos first
+  // so they can be emitted either as text or as JSON (--summarize works with --json).
+  let summaries: Map<string, string> | null = null;
+  if (options.summarize) {
+    summaries = new Map();
+    for (const { id, result } of results) {
+      const title = options.title || result.title || `Video ${id}`;
+      const sourceUrl = `https://www.youtube.com/watch?v=${id}`;
+      const summary = await summarizeTranscript(result.text, {
+        title,
+        url: sourceUrl,
+        model: options.model,
+        lang: options.summaryLang as SummaryLang | undefined
+      });
+      summaries.set(id, summary.trim());
+    }
+  }
+
   // Output results
   if (options.json) {
-    const jsonOutput = results.map(({ id, result }) => ({
-      id,
-      title: result.title,
-      text: result.text,
-      language: result.language,
-      source: result.source
-    }));
+    const jsonOutput = results.map(({ id, result }) => {
+      const text = options.summarize
+        ? summaries?.get(id) ?? result.text
+        : result.text;
+      return {
+        id,
+        title: result.title,
+        text,
+        language: result.language,
+        source: result.source
+      };
+    });
 
     await output(JSON.stringify(results.length === 1 ? jsonOutput[0] : jsonOutput, null, 2));
     return;
@@ -120,14 +150,9 @@ async function main() {
     const title = options.title || result.title || `Video ${id}`;
 
     if (options.raw) {
-      outputBlocks.push(result.text.trim() + "\n");
+      outputBlocks.push((options.summarize ? summaries?.get(id) : result.text) + "\n");
     } else if (options.summarize) {
-      const summary = await summarizeTranscript(result.text, {
-        title,
-        url: sourceUrl,
-        model: options.model
-      });
-      outputBlocks.push(summary.trim() + "\n");
+      outputBlocks.push(summaries?.get(id) + "\n");
     } else {
       outputBlocks.push(
         buildArticle(result.text, {
