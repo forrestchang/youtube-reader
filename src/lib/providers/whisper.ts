@@ -1,4 +1,4 @@
-import { exec } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFile, rm, mkdtemp, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,7 +7,7 @@ import { env } from "node:process";
 import { hasYtdlp, detectWhisper, type WhisperBackend } from "../tools";
 import type { TranscriptProvider, TranscriptResult } from "./index";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export class WhisperProvider implements TranscriptProvider {
   name = "whisper";
@@ -39,18 +39,21 @@ export class WhisperProvider implements TranscriptProvider {
 
       // Download audio using yt-dlp
       const audioPath = join(tempDir, `${videoId}.mp3`);
-      const downloadCmd = [
+      const downloadArgs = [
         "yt-dlp",
         "-x",
-        "--audio-format mp3",
-        "--audio-quality 5", // Lower quality for faster download
+        "--audio-format",
+        "mp3",
+        "--audio-quality",
+        "5", // Lower quality for faster download
         "--no-warnings",
         "--print-json",
-        `-o "${join(tempDir, "%(id)s.%(ext)s")}"`,
-        `"${url}"`
-      ].join(" ");
+        "-o",
+        join(tempDir, "%(id)s.%(ext)s"),
+        url
+      ];
 
-      const { stdout: downloadOutput } = await execAsync(downloadCmd, {
+      const { stdout: downloadOutput } = await execFileAsync(downloadArgs[0], downloadArgs.slice(1), {
         maxBuffer: 10 * 1024 * 1024
       });
 
@@ -88,7 +91,9 @@ export class WhisperProvider implements TranscriptProvider {
           text = await this.runWhisperApi(audioPath);
           break;
         default:
-          throw new Error(`Unknown whisper backend: ${(this.backend as WhisperBackend).type}`);
+          throw new Error(
+            `Unknown whisper backend: ${(this.backend as WhisperBackend).type}`
+          );
       }
 
       if (!text.trim()) {
@@ -109,20 +114,19 @@ export class WhisperProvider implements TranscriptProvider {
 
   private async runWhisperCpp(audioPath: string, tempDir: string): Promise<string> {
     const outputBase = join(tempDir, "output");
+    const exe = (this.backend as { path: string }).path;
     const args = [
-      `-m "${this.getModelPath("whisper-cpp")}"`,
-      `-f "${audioPath}"`,
-      `-otxt`,
-      `-of "${outputBase}"`
+      "-m",
+      await this.getModelPath("whisper-cpp"),
+      "-f",
+      audioPath,
+      "-otxt",
+      "-of",
+      outputBase,
+      ...(this.lang ? ["-l", this.lang] : [])
     ];
 
-    if (this.lang) {
-      args.push(`-l ${this.lang}`);
-    }
-
-    const cmd = `${this.backend.type === "whisper-cpp" ? (this.backend as { path: string }).path : "whisper"} ${args.join(" ")}`;
-
-    await execAsync(cmd, { maxBuffer: 50 * 1024 * 1024 });
+    await execFileAsync(exe, args, { maxBuffer: 50 * 1024 * 1024 });
 
     // Read output file
     const outputPath = `${outputBase}.txt`;
@@ -134,20 +138,19 @@ export class WhisperProvider implements TranscriptProvider {
   }
 
   private async runWhisperCli(audioPath: string, tempDir: string): Promise<string> {
+    const exe = (this.backend as { path: string }).path;
     const args = [
-      `"${audioPath}"`,
-      `--model ${this.model}`,
-      `--output_dir "${tempDir}"`,
-      "--output_format txt"
+      audioPath,
+      "--model",
+      this.model,
+      "--output_dir",
+      tempDir,
+      "--output_format",
+      "txt",
+      ...(this.lang ? ["--language", this.lang] : [])
     ];
 
-    if (this.lang) {
-      args.push(`--language ${this.lang}`);
-    }
-
-    const cmd = `${(this.backend as { path: string }).path} ${args.join(" ")}`;
-
-    await execAsync(cmd, { maxBuffer: 50 * 1024 * 1024 });
+    await execFileAsync(exe, args, { maxBuffer: 50 * 1024 * 1024 });
 
     // Find output file (whisper names it based on input)
     const outputPath = audioPath.replace(/\.[^.]+$/, ".txt");
@@ -159,15 +162,17 @@ export class WhisperProvider implements TranscriptProvider {
   }
 
   private async runMlxWhisper(audioPath: string, tempDir: string): Promise<string> {
-    const args = [`"${audioPath}"`, `--model ${this.model}`, `--output-dir "${tempDir}"`];
+    const exe = (this.backend as { path: string }).path;
+    const args = [
+      audioPath,
+      "--model",
+      this.model,
+      "--output-dir",
+      tempDir,
+      ...(this.lang ? ["--language", this.lang] : [])
+    ];
 
-    if (this.lang) {
-      args.push(`--language ${this.lang}`);
-    }
-
-    const cmd = `${(this.backend as { path: string }).path} ${args.join(" ")}`;
-
-    await execAsync(cmd, { maxBuffer: 50 * 1024 * 1024 });
+    await execFileAsync(exe, args, { maxBuffer: 50 * 1024 * 1024 });
 
     // Find output file
     const outputPath = audioPath.replace(/\.[^.]+$/, ".txt");
@@ -184,35 +189,44 @@ export class WhisperProvider implements TranscriptProvider {
       throw new Error("OPENAI_API_KEY is required for OpenAI Whisper API");
     }
 
-    // Use curl to call OpenAI API
-    const cmd = [
-      "curl -s",
-      "https://api.openai.com/v1/audio/transcriptions",
-      `-H "Authorization: Bearer ${apiKey}"`,
-      `-F "model=whisper-1"`,
-      `-F "file=@${audioPath}"`,
-      this.lang ? `-F "language=${this.lang}"` : ""
-    ]
-      .filter(Boolean)
-      .join(" ");
+    // Use fetch + FormData instead of curl so OPENAI_API_KEY is only sent in the
+    // Authorization header and never appears in the process list.
+    const audioBuffer = await readFile(audioPath);
+    const audioBlob = new Blob([audioBuffer]);
+    const formData = new FormData();
+    formData.append("model", "whisper-1");
+    formData.append("file", audioBlob, `${videoId(audioPath)}.mp3`);
+    if (this.lang) {
+      formData.append("language", this.lang);
+    }
 
-    const { stdout } = await execAsync(cmd, { maxBuffer: 50 * 1024 * 1024 });
+    const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: formData
+    });
+
+    const stdout = await response.text();
 
     try {
-      const response = JSON.parse(stdout);
-      if (response.error) {
-        throw new Error(response.error.message || "OpenAI API error");
+      const responseJson = JSON.parse(stdout);
+      if (responseJson.error) {
+        throw new Error(responseJson.error.message || "OpenAI API error");
       }
-      return response.text || "";
+      return responseJson.text || "";
     } catch (error) {
       if (error instanceof SyntaxError) {
-        throw new Error(`OpenAI API returned invalid JSON: ${stdout.slice(0, 200)}`);
+        throw new Error(
+          `OpenAI API returned invalid JSON: ${stdout.slice(0, 200)}`
+        );
       }
       throw error;
     }
   }
 
-  private getModelPath(backendType: string): string {
+  private async getModelPath(backendType: string): Promise<string> {
     // Default model paths for whisper.cpp
     // Users can override by setting WHISPER_MODEL_PATH
     const customPath = env.WHISPER_MODEL_PATH;
@@ -227,8 +241,21 @@ export class WhisperProvider implements TranscriptProvider {
       `${env.HOME}/whisper.cpp/models/${modelName}`
     ];
 
-    // For simplicity, return the first common path
-    // The actual binary will handle model loading
+    // Check actual file existence and return the first available model path
+    for (const candidate of commonPaths) {
+      try {
+        await access(candidate);
+        return candidate;
+      } catch {
+        // keep looking
+      }
+    }
+
+    // Fallback: let the underlying binary handle model loading
     return commonPaths[0];
   }
+}
+
+function videoId(audioPath: string): string {
+  return audioPath.split("/").pop()?.replace(/\.[^.]+$/, "") || "audio";
 }

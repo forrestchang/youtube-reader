@@ -14,7 +14,14 @@ export function extractVideoId(input: string): string | null {
     return null;
   }
 
-  const host = url.hostname.replace(/^www\./, "");
+  // تدقيق النطاق: السماح بنطاقات يوتيوب الرسمية فقط
+  // (youtube.com و youtu.be، مع أو بدون www.) لمنع تمرير روابط مواقع أخرى.
+  const host = url.hostname.replace(/^www\./, "").toLowerCase();
+  const isYouTube = host === "youtube.com" || host === "youtu.be";
+  if (!isYouTube) {
+    return null;
+  }
+
   const path = url.pathname;
 
   if (host === "youtu.be") {
@@ -22,15 +29,14 @@ export function extractVideoId(input: string): string | null {
     return id && /^[a-zA-Z0-9_-]{11}$/.test(id) ? id : null;
   }
 
-  if (host.endsWith("youtube.com")) {
-    const vParam = url.searchParams.get("v");
-    if (vParam && /^[a-zA-Z0-9_-]{11}$/.test(vParam)) return vParam;
+  // host === "youtube.com"
+  const vParam = url.searchParams.get("v");
+  if (vParam && /^[a-zA-Z0-9_-]{11}$/.test(vParam)) return vParam;
 
-    const parts = path.split("/").filter(Boolean);
-    const index = parts.findIndex((p) => ["embed", "shorts", "live"].includes(p));
-    if (index >= 0 && parts[index + 1] && /^[a-zA-Z0-9_-]{11}$/.test(parts[index + 1])) {
-      return parts[index + 1];
-    }
+  const parts = path.split("/").filter(Boolean);
+  const index = parts.findIndex((p) => ["embed", "shorts", "live"].includes(p));
+  if (index >= 0 && parts[index + 1] && /^[a-zA-Z0-9_-]{11}$/.test(parts[index + 1])) {
+    return parts[index + 1];
   }
 
   return null;
